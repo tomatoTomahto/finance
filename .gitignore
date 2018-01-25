@@ -1,0 +1,11 @@
+.idea/
+*.pyc
+collect/*.pyc
+.aws/
+data/
+.cache/
+.ipython/
+.local/
+.oracle_jre_usage/
+.bash_history
+.viminfo

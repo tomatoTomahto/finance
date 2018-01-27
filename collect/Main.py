@@ -23,6 +23,6 @@ companies = f.loadCompanies()
 
 f.saveHistoricalPrices(companies, pricesStartDate, pricesEndDate, pricesFile)
 
-f.saveHistoricalActions(companies, pricesStartDate, pricesEndDate, actionsFile)
+f.saveHistoricalActions(companies[825:].reset_index(), pricesStartDate, pricesEndDate, actionsFile)
 
 n.saveHistoricalNews(articleStartYear, articleStartMonth, articleEndYear, articleEndMonth, articlesFile)

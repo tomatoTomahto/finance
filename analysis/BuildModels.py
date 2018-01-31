@@ -3,8 +3,8 @@
 # This script generates machine learning models used to predict the daily price change
 # of NASDAQ and NYSE stocks using historical stock, news, and analyst information
 
-# # Check to see files are available in HDFS
-# Note: you should copy the data from 
+# # Data is assumed to be in AWS S3 but can also be loaded in from HDFS
+#!aws s3 ls s3://sgupta-s3/finance/data/historicPrices/
 #!hdfs dfs -ls finance/data
 
 # # Imports
@@ -12,21 +12,21 @@ from pyspark.sql import SparkSession, functions as F
 from pyspark import StorageLevel
 from pyspark.ml import Pipeline
 import os, sys
-sys.path.append('finance/analysis')
+sys.path.append('analysis')
 import StockModel as SM, ArticleModel as AM, AnalystModel as RM
 
 # # Spark Connection
 spark = SparkSession \
   .builder \
-  .appName("Finance Analysis") \
+  .appName("Stock Analysis") \
   .getOrCreate()
 
+companiesLoc='s3a://sgupta-s3/finance/data/companyList.csv'
+pricesLoc='s3a://sgupta-s3/finance/data/historicPrices/historicPrices_1.csv'
+  
 # # Model 1: Predict long and short positions based on historic stock information (price, volume, etc) 
 # ## Load in Historical prices for all stocks on NASDAQ and NYSE exchanges
-prices = SM.loadData(spark,
-                     'finance/data/companylist_NASDAQ.csv',
-                     'finance/data/companylist_NYSE.csv',
-                     'finance/data/historicPrices.json')
+prices = SM.loadData(spark,companiesLoc, pricesLoc)
 prices.printSchema()
 
 # ## Transform the data - calculate price changes, load historical price changes

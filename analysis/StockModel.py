@@ -7,25 +7,23 @@ from pyspark.ml.regression import RandomForestRegressor
 from pyspark.ml.evaluation import MulticlassClassificationEvaluator, RegressionEvaluator
 
 # ## Read in Historic Prices, clean up the data
-def loadData(spark, ndCompaniesFile, nyCompaniesFile, pricesFile):
+def loadData(spark, companiesLoc, pricesLoc):
   # ## Read in Company Data from Exchanges
-  nasdaq = spark.read.load(ndCompaniesFile, format="csv", header=True).drop('_c8')\
-    .withColumn('Exchange',F.lit('NASDAQ'))
-  nyse = spark.read.load(nyCompaniesFile, format="csv", header=True).drop('_c8')\
-    .withColumn('Exchange',F.lit('NYSE'))
-  companies = nasdaq.union(nyse)
+  companies = spark.read.load(companiesLoc, format="csv", header=True)
   print('Total Companies on NYSE and NASDAQ: %d' % companies.count())
 
-  prices = spark.read.load(pricesFile, format="json")
-  prices = prices.filter('col0!=Null')\
-    .select(prices.col0.alias('Date'), prices.col1.alias('Open'), prices.col2.alias('High'), prices.col3.alias('Low'),
-            prices.col4.alias('Close'), prices.col5.alias('Volume'), prices.col6.alias('Adj_Close'), prices.Symbol)\
-    .union(prices.select('Date','Open','High','Low','Close','Volume','Adj_Close','Symbol'))\
-    .dropDuplicates()
-  prices = prices.select(prices.Date.cast('date'), prices.Symbol, prices.Volume.cast('int'), 
-                         prices.Open.cast('float'), prices.High.cast('float'), prices.Low.cast('float'), 
-                         prices.Close.cast('float'), prices.Adj_Close.cast('float'))\
-    .join(companies.select('Symbol','Sector','industry'), 'Symbol')
+  fields = [StructField('Date', DateType(), True),
+            StructField('Metric', StringType(), True),
+            StructField('Symbol', StringType(), True),
+            StructField('Price', FloatType(), True)]
+  schema = StructType(fields)
+  
+  prices = spark.read.load(pricesLoc, format="csv", schema=schema)\
+    .groupBy('Date', 'Symbol')\
+    .pivot('Metric', values=['Adj Close','Close','Open','High','Low','Volume'])\
+    .sum('Price')\
+    .join(companies.withColumnRenamed('industry','Industry')\
+          .select('Symbol','Sector','Industry'), 'Symbol')
   
   return prices
 

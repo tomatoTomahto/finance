@@ -1,5 +1,6 @@
 from pyspark.sql import functions as F, Window
 from pyspark.sql.types import *
+from pyspark.sql.window import Window
 from pyspark.ml.feature import CountVectorizer, VectorAssembler, StringIndexer
 from pyspark.ml import Pipeline
 from pyspark.ml.classification import RandomForestClassifier
@@ -15,7 +16,7 @@ def loadData(spark, companiesLoc, pricesLoc):
   fields = [StructField('Date', DateType(), True),
             StructField('Metric', StringType(), True),
             StructField('Symbol', StringType(), True),
-            StructField('Price', FloatType(), True)]
+            StructField('Price', DecimalType(scale=2), True)]
   schema = StructType(fields)
   
   prices = spark.read.load(pricesLoc, format="csv", schema=schema)\
@@ -23,31 +24,34 @@ def loadData(spark, companiesLoc, pricesLoc):
     .pivot('Metric', values=['Adj Close','Close','Open','High','Low','Volume'])\
     .sum('Price')\
     .join(companies.withColumnRenamed('industry','Industry')\
-          .select('Symbol','Sector','Industry'), 'Symbol')
+          .select('Symbol','Sector','Industry'), 'Symbol')\
+    .na.fill({'Sector':'unknown','Industry':'unknown'})
   
   return prices
 
 # # Data Transformations
 def transformData(prices):
-  # ## Compute daily stock price changes
-  priceChanges = prices.withColumn('PriceChange', (F.col('Close')-F.col('Open'))/F.col('Open')*100)\
-      .withColumn('absPriceChange', F.abs(F.col('PriceChange')))\
-      .withColumn('Spread', F.col('High')-F.col('Low'))\
-      .select('Date','Sector','industry','Symbol','Volume','PriceChange','Spread','absPriceChange')\
-      .na.fill({'PriceChange': 0.0, 'absPriceChange': 0.0})
+  # Window to get last trading day's metrics for each stock
+  w = Window.partitionBy('Symbol').orderBy('Date')
   
-  # ## Get previous day's info for each stock
-  yPriceChanges = priceChanges.withColumn('Date',F.date_add(priceChanges.Date,1))\
-    .withColumnRenamed('PriceChange','yPriceChange')\
-    .withColumnRenamed('absPriceChange','yAbsPriceChange')\
-    .withColumnRenamed('Volume','yVolume')\
-    .withColumnRenamed('Spread','ySpread')
-    
-  priceChanges = priceChanges.join(yPriceChanges, ['Sector','Industry','Symbol','Date'])\
-    .select('Date','Symbol','PriceChange','absPriceChange','Volume', 'Spread', 
-            'yPriceChange', 'yAbsPriceChange','yVolume', 'ySpread','Sector','Industry')
-  
-  return priceChanges
+  # Compute daily stock price changes
+  returns = prices.withColumn('Return', (F.col('Adj Close')/F.col('Open')).astype('decimal(10,4)'))\
+    .withColumn('Spread', (F.col('High')/F.col('Low')).astype('decimal(10,5)'))\
+    .na.fill({'Return': 0.0, 'Spread': 0.0})\
+    .select('Date','Symbol','Sector','Industry','Return','Spread','Volume')\
+    .withColumn('yReturn', F.lag('Return').over(w))\
+    .withColumn('ySpread', F.lag('Spread').over(w))\
+    .withColumn('yVolume', F.lag('Volume').over(w))\
+    .na.fill({'yReturn': 0.0, 'ySpread': 0.0, 'yVolume': 0})
+
+  # Filter out extraordinary daily returns or trading volumes (noise)
+  returns = returns.filter(returns.Return.between(0.5,1.5) & 
+                       returns.yReturn.between(0.5,1.5) &
+                       returns.Spread.between(0.5,1.5) & 
+                       returns.ySpread.between(0.5,1.5))\
+    .filter('Volume>0 and yVolume>0')
+
+  return returns
 
 # ## Feature Engineering - combine stock symbol, sector, industry, previous day's volume & price change into a feature vector
 def engineerFeatures():
@@ -58,7 +62,7 @@ def engineerFeatures():
                                   "yVolume",'ySpread',"yPriceChange",'yAbsPriceChange'], outputCol="features")
   
   # ## Random Forest Regression - use the categorical and numerical features to predict today's price change
-  stockRfr = RandomForestRegressor(featuresCol="features", labelCol="PriceChange", predictionCol="pPriceChange",
+  stockRfr = RandomForestRegressor(featuresCol="features", labelCol="Return", predictionCol="pReturn",
                                    maxBins=5700)
   
   return [stockSI, sectorSI, industrySI, va, stockRfr]
